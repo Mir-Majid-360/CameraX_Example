@@ -47,35 +47,39 @@ class MainActivity : AppCompatActivity() {
 
     private var videoCapture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
-
+    private var countDownStartTime = 30000L // 30 Seconds
     private var countDownTimer: CountDownTimer? = null
-    private var recordingTimer: CountDownTimer? = null
-    private var remainingRecordingTimeMillis = 0L
 
     private lateinit var cameraExecutor: ExecutorService
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-    private val activityResultLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        )
-        { permissions ->
-            // Handle Permission granted/rejected
-            var permissionGranted = true
-            permissions.entries.forEach {
-                if (it.key in REQUIRED_PERMISSIONS && it.value == false)
-                    permissionGranted = false
-            }
-            if (!permissionGranted) {
-                Toast.makeText(
-                    baseContext,
-                    "Permission request denied",
-                    Toast.LENGTH_SHORT
-                ).show()
-            } else {
-                startCamera()
-            }
+    /**
+     *    Recording Timer
+     */
+
+
+    private var recordingTimer: CountDownTimer? = null
+    private var recordingStartTime: Long = 0
+    private var isRecording = false
+
+
+    private val activityResultLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        // Handle Permission granted/rejected
+        var permissionGranted = true
+        permissions.entries.forEach {
+            if (it.key in REQUIRED_PERMISSIONS && it.value == false) permissionGranted = false
         }
+        if (!permissionGranted) {
+            Toast.makeText(
+                baseContext, "Permission request denied", Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            startCamera()
+        }
+    }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,17 +92,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             requestPermissions()
         }
-        countDownTimer = createCountDownTimer(10 * 1000) // 30 seconds
-        recordingTimer = createRecordingTimer(Long.MAX_VALUE)
+        countDownTimer = createCountDownTimer() // 30 seconds
 
 
         // Set up the listeners for take photo and video capture buttons
 //        viewBinding.ibCamera.setOnClickListener { takePhoto() }
-
-
         viewBinding.ibCamera.setOnClickListener {
+
             captureVideo()
-            countDownTimer?.start()
+
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -120,6 +122,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    /**
+     *  Start Timer
+     * **/
+
+    private fun createRecordingTimer(): CountDownTimer {
+        return object : CountDownTimer(Long.MAX_VALUE, 1000) {
+            override fun onTick(millisUntilFinished: Long) {
+                val elapsedMillis = System.currentTimeMillis() - recordingStartTime
+                val elapsedSeconds = elapsedMillis / 1000
+                val minutes = elapsedSeconds / 60
+                val seconds = elapsedSeconds % 60
+                val formattedTime = String.format("%02d:%02d", minutes, seconds)
+                viewBinding.durationTextView.text = formattedTime
+            }
+
+            override fun onFinish() {
+                // Timer finished (will not be reached)
+            }
+        }
+    }
+
+
     private fun pauseRecording() {
         recording?.pause()
 
@@ -129,29 +154,8 @@ class MainActivity : AppCompatActivity() {
         recording?.resume()
     }
 
-    private fun createRecordingTimer(duration: Long): CountDownTimer {
-        remainingRecordingTimeMillis = duration
-        return object : CountDownTimer(remainingRecordingTimeMillis, 1000) {
-            override fun onTick(millisUntilFinished: Long) {
-                val secondsElapsed = (Long.MAX_VALUE - millisUntilFinished) / 1000
-                val minutes = secondsElapsed / 60
-                val seconds = secondsElapsed % 60
-                val formattedTime = String.format("%02d:%02d", minutes, seconds)
-                viewBinding.durationTextView.text = formattedTime
-                viewBinding.durationTextView.visibility = View.VISIBLE
-
-            }
-
-
-            override fun onFinish() {
-                // Timer finished
-                viewBinding.durationTextView.visibility = View.GONE
-            }
-        }
-    }
-
-    private fun createCountDownTimer(duration: Long): CountDownTimer {
-        return object : CountDownTimer(duration, 1000) {
+    private fun createCountDownTimer(): CountDownTimer {
+        return object : CountDownTimer(countDownStartTime, 1000) {
             override fun onTick(millisUntilFinished: Long) {
                 // Update UI with remaining time
                 val secondsRemaining = millisUntilFinished / 1000
@@ -165,6 +169,7 @@ class MainActivity : AppCompatActivity() {
             override fun onFinish() {
                 // Stop video recording when countdown finishes
                 //    stopRecording(null) // Pass a dummy View
+                recording?.close()
                 viewBinding.countdownTextView.visibility = View.GONE
             }
         }
@@ -176,8 +181,7 @@ class MainActivity : AppCompatActivity() {
         val imageCapture = imageCapture ?: return
 
         // Create time stamped name and MediaStore entry.
-        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis())
+        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US).format(System.currentTimeMillis())
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -187,32 +191,25 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Create output options object which contains file + metadata
-        val outputOptions = ImageCapture.OutputFileOptions
-            .Builder(
-                contentResolver,
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues
-            )
-            .build()
+        val outputOptions = ImageCapture.OutputFileOptions.Builder(
+                contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
+            ).build()
 
         // Set up image capture listener, which is triggered after photo has
         // been taken
-        imageCapture.takePicture(
-            outputOptions,
+        imageCapture.takePicture(outputOptions,
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onError(exc: ImageCaptureException) {
                     Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
                 }
 
-                override fun
-                        onImageSaved(output: ImageCapture.OutputFileResults) {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     val msg = "Photo capture succeeded: ${output.savedUri}"
                     Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
                     Log.d(TAG, msg)
                 }
-            }
-        )
+            })
     }
 
     @SuppressLint("UseCompatLoadingForDrawables")
@@ -229,8 +226,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // create and start a new recording session
-        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis())
+        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US).format(System.currentTimeMillis())
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
@@ -239,31 +235,40 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val mediaStoreOutputOptions = MediaStoreOutputOptions
-            .Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-            .setContentValues(contentValues)
-            .build()
-        recording = videoCapture.output
-            .prepareRecording(this, mediaStoreOutputOptions)
-            .apply {
+        val mediaStoreOutputOptions = MediaStoreOutputOptions.Builder(
+                contentResolver,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            ).setContentValues(contentValues).build()
+        recording = videoCapture.output.prepareRecording(this, mediaStoreOutputOptions).apply {
                 if (PermissionChecker.checkSelfPermission(
-                        this@MainActivity,
-                        Manifest.permission.RECORD_AUDIO
-                    ) ==
-                    PermissionChecker.PERMISSION_GRANTED
+                        this@MainActivity, Manifest.permission.RECORD_AUDIO
+                    ) == PermissionChecker.PERMISSION_GRANTED
                 ) {
                     withAudioEnabled()
                 }
-            }
-            .start(ContextCompat.getMainExecutor(this)) { recordEvent ->
+            }.start(ContextCompat.getMainExecutor(this)) { recordEvent ->
+
                 when (recordEvent) {
                     is VideoRecordEvent.Start -> {
-//
-                        Log.w("VideoRecording", "Video recording Started")
+                        val currentVideoDuration =
+                            recordEvent.recordingStats.recordedDurationNanos / 1000000
+                        recordingStartTime = System.currentTimeMillis() - currentVideoDuration
+                        countDownStartTime = countDownStartTime - currentVideoDuration
+
+                        countDownTimer = createCountDownTimer()
+                        recordingTimer = createRecordingTimer()
                         countDownTimer?.start()
-                        viewBinding.durationTextView.visibility = View.VISIBLE
                         recordingTimer?.start()
-//                        recordingTimer?.start()
+
+                        // Update UI
+                        isRecording = true
+                        viewBinding.durationTextView.visibility = View.VISIBLE
+                        viewBinding.countdownTextView.visibility = View.VISIBLE
+
+
+
+
+                        Log.w("VideoRecording", "Video recording Started")
                         viewBinding.ibRotate.visibility = View.GONE
                         viewBinding.ibCamera.setImageDrawable(getDrawable(R.drawable.baseline_pause_24))
                         viewBinding.ibPause.visibility = View.VISIBLE
@@ -274,69 +279,79 @@ class MainActivity : AppCompatActivity() {
 
                     is VideoRecordEvent.Finalize -> {
                         if (!recordEvent.hasError()) {
+
+                            countDownStartTime = 30000L
                             viewBinding.ibRotate.visibility = View.VISIBLE
-                            Log.w("VideoRecording" ,"Video Duration Saved at : ${recordEvent.recordingStats.recordedDurationNanos/ 1_000_000_000} Seconds")
+                            Log.w(
+                                "VideoRecording",
+                                "Video Duration Saved at : ${recordEvent.recordingStats.recordedDurationNanos / 1_000_000_000} Seconds"
+                            )
 
                             Log.w("VideoRecording", "Video recording Stopped with SUCCESS")
 
                             val uri = recordEvent.outputResults.outputUri
                             Log.d("DancerMatch", uri.path.toString())
-                            val msg = "Video capture succeeded: " +
-                                    "${recordEvent.outputResults.outputUri}"
-                            Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT)
-                                .show()
+                            val msg =
+                                "Video capture succeeded: " + "${recordEvent.outputResults.outputUri}"
+                            Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
                             Log.d(TAG, msg)
                             viewBinding.ibPause.visibility = View.GONE
                             viewBinding.ibRetake.visibility = View.GONE
                             viewBinding.ibPlay.visibility = View.GONE
                             viewBinding.ibCamera.setImageDrawable(getDrawable(R.drawable.baseline_videocam_24))
-                            countDownTimer?.cancel()
-                            recordingTimer?.cancel()
                             viewBinding.durationTextView.visibility = View.GONE
+                            viewBinding.countdownTextView.visibility = View.GONE
 
                         } else {
+                            countDownStartTime = 30000L
+
                             Log.w("VideoRecording", "Video recording Stopper with ERROR")
 
-                            recording?.close()
                             recording = null
                             Log.e(
-                                TAG, "Video capture ends with error: " +
-                                        "${recordEvent.error}"
+                                TAG, "Video capture ends with error: " + "${recordEvent.error}"
                             )
-
 
                             viewBinding.ibPause.visibility = View.GONE
                             viewBinding.ibRetake.visibility = View.GONE
                             viewBinding.ibPlay.visibility = View.GONE
                             viewBinding.ibCamera.setImageDrawable(getDrawable(R.drawable.baseline_videocam_24))
-                            countDownTimer?.cancel()
-//                            recordingTimer?.cancel()
-                            countDownTimer?.onFinish()
-//                            recordingTimer?.onFinish()
                         }
 
                     }
 
                     is VideoRecordEvent.Pause -> {
 
-                      Log.w("VideoRecording" ,"Video Duration Paused at : ${recordEvent.recordingStats.recordedDurationNanos /1_000_000_000}")
-                        Log.w("VideoRecording", "Video recording Paused")
-                        countDownTimer?.cancel()
                         recordingTimer?.cancel()
+                        countDownTimer?.cancel()
+                        Log.w(
+                            "VideoRecording",
+                            "Video Duration Paused at : ${recordEvent.recordingStats.recordedDurationNanos / 1_000_000_000}"
+                        )
+                        Log.w("VideoRecording", "Video recording Paused")
                         viewBinding.ibPause.visibility = View.GONE
                         viewBinding.ibPlay.visibility = View.VISIBLE
 
                     }
 
                     is VideoRecordEvent.Resume -> {
-                        Log.w("VideoRecording" ,"Video Duration resumed at : ${recordEvent.recordingStats.recordedDurationNanos /1_000_000_000}")
 
-                        Log.w("VideoRecording", "Video recording Resumed")
+                        val currentVideoDuration =
+                            recordEvent.recordingStats.recordedDurationNanos / 1000000
+                        recordingStartTime = System.currentTimeMillis() - currentVideoDuration
+                        countDownStartTime = countDownStartTime - currentVideoDuration
 
-
+                        countDownTimer = createCountDownTimer()
+                        recordingTimer = createRecordingTimer()
                         countDownTimer?.start()
-                        recordingTimer?.onTick(remainingRecordingTimeMillis)
                         recordingTimer?.start()
+                        Log.w(
+                            "VideoRecording",
+                            "Video Duration resumed at : ${recordEvent.recordingStats.recordedDurationNanos / 1_000_000_000}"
+                        )
+                        Log.w("VideoRecording", "Video recording Resumed")
+//                        recordingTimer?.onTick(remainingRecordingTimeMillis)
+//                        recordingTimer?.start()
 //                        recordingTimer?.start()
                         viewBinding.ibPause.visibility = View.VISIBLE
                         viewBinding.ibPlay.visibility = View.GONE
@@ -357,19 +372,14 @@ class MainActivity : AppCompatActivity() {
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
             // Preview
-            val preview = Preview.Builder()
-                .build()
-                .also {
+            val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(viewBinding.viewFinder.surfaceProvider)
                 }
-            val recorder = Recorder.Builder()
-                .setQualitySelector(
+            val recorder = Recorder.Builder().setQualitySelector(
                     QualitySelector.from(
-                        Quality.HIGHEST,
-                        FallbackStrategy.higherQualityOrLowerThan(Quality.SD)
+                        Quality.HIGHEST, FallbackStrategy.higherQualityOrLowerThan(Quality.SD)
                     )
-                )
-                .build()
+                ).build()
             videoCapture = VideoCapture.withOutput(recorder)
 
             imageCapture = ImageCapture.Builder().build()
@@ -432,15 +442,13 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "CameraXApp"
         private const val FILENAME_FORMAT = "yyyy-MM-dd-HH-mm-ss-SSS"
-        private val REQUIRED_PERMISSIONS =
-            mutableListOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO
-            ).apply {
-                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-                    add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                }
-            }.toTypedArray()
+        private val REQUIRED_PERMISSIONS = mutableListOf(
+            Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO
+        ).apply {
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }.toTypedArray()
     }
 
     private class LuminosityAnalyzer(private val listener: LumaListener) : ImageAnalysis.Analyzer {
